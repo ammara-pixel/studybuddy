@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StudyBuddy – AI Study Partner</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Inter,system-ui,sans-serif;background:#0f0f1a;color:#e2e8f0;min-height:100vh}
+::-webkit-scrollbar{width:5px}::-webkit-scrollbar-thumb{background:#7c3aed44;border-radius:3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-6px)}}
+.spinner{width:36px;height:36px;border:3px solid #2d2d4e;border-top:3px solid #7c3aed;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto}
+.btn{background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;border:none;border-radius:10px;padding:10px 20px;cursor:pointer;font-weight:600;font-size:14px}
+.btn:hover{opacity:0.9}
+.card{background:#1a1a2e;border:1px solid #2d2d4e;border-radius:16px;padding:20px;margin-bottom:16px}
+input,textarea,select{width:100%;padding:10px 14px;border-radius:10px;border:1px solid #2d2d4e;background:#0f0f1a;color:#e2e8f0;font-size:14px;outline:none;font-family:inherit}
+textarea{resize:vertical}
+.nav-btn{width:100%;display:flex;align-items:center;gap:12px;padding:11px 14px;border:none;cursor:pointer;background:transparent;border-left:3px solid transparent;color:#94a3b8;font-size:13px;font-weight:400;text-align:left;transition:all 0.15s}
+.nav-btn.active{background:#7c3aed22;border-left:3px solid #7c3aed;color:#a78bfa;font-weight:700}
+.progress-bar{height:8px;background:#2d2d4e;border-radius:4px;overflow:hidden;margin-top:4px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#7c3aed,#3b82f6);border-radius:4px}
+.flash-card{background:#1a1a2e;border:1px solid #2d2d4e;border-radius:16px;padding:24px;min-height:130px;cursor:pointer;display:flex;align-items:center;justify-content:center;text-align:center;transition:all 0.3s}
+.flash-card.flipped{background:linear-gradient(135deg,#7c3aed,#3b82f6)}
+.chat-bubble-user{background:linear-gradient(135deg,#7c3aed,#3b82f6);color:#fff;padding:12px 16px;border-radius:16px;max-width:75%;font-size:14px;line-height:1.7;white-space:pre-wrap}
+.chat-bubble-ai{background:#1a1a2e;border:1px solid #2d2d4e;color:#e2e8f0;padding:12px 16px;border-radius:16px;max-width:75%;font-size:14px;line-height:1.7;white-space:pre-wrap}
+.tag{background:#7c3aed22;border:1px solid #7c3aed44;color:#a78bfa;padding:4px 12px;border-radius:20px;font-size:12px;cursor:pointer;white-space:nowrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.result-box{background:#1a1a2e;border:1px solid #2d2d4e;border-radius:16px;padding:20px;margin-top:16px}
+.copy-btn{background:transparent;border:1px solid #2d2d4e;color:#94a3b8;border-radius:8px;padding:5px 12px;cursor:pointer;font-size:13px}
+</style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script>
+// ─── STATE ───────────────────────────────────────────────
+const S = {
+  page: localStorage.getItem("sb_user") ? "app" : "login",
+  user: JSON.parse(localStorage.getItem("sb_user") || "null"),
+  nav: "dashboard",
+  apiKey: localStorage.getItem("sb_gemini_key") || "",
+  showKeySetup: !localStorage.getItem("sb_gemini_key"),
+  loading: false,
+  history: JSON.parse(localStorage.getItem("sb_history") || "[]"),
+  // notes
+  noteTopic:"", noteResult:"",
+  // summary
+  sumTopic:"", sumResult:"",
+  // flash
+  flashTopic:"", flashcards:[], flipped:{},
+  // exam
+  examTopic:"", examResult:"",
+  // paper
+  paperText:"", paperResult:"",
+  // quiz
+  quizTopic:"", quizQs:[], quizAns:{}, quizScore:null,
+  // chat
+  chat:[], chatIn:"", speaking:false,
+  // pomodoro
+  pSec:25*60, pRun:false, pSessions:0, pInterval:null,
+  // planner
+  plans: JSON.parse(localStorage.getItem("sb_plans")||"[]"),
+  planSubj:"", planGoal:"", planDay:"",
+  // syllabus
+  syllTopics: JSON.parse(localStorage.getItem("sb_syll")||"[]"),
+  syllSubj:"", syllTopic:"",
+  // countdown
+  exams: JSON.parse(localStorage.getItem("sb_exams")||"[]"),
+  examName:"", examDate:"", examSubj:"",
+  // progress
+  progress: JSON.parse(localStorage.getItem("sb_progress")||'{"Mathematics":75,"Physics":55,"Chemistry":40,"Biology":65}'),
+  // auth
+  loginName:"", loginEmail:"", loginPass:"",
+  streak:7
+};
+
+// ─── GEMINI API ────────────────────────────────────────────
+async function callGemini(prompt, system="") {
+  const key = S.apiKey;
+  if (!key) throw new Error("No API key. Please add your Gemini API key.");
+  const full = system ? system + "\n\n" + prompt : prompt;
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`, {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({
+      contents:[{parts:[{text: full}]}],
+      generationConfig:{maxOutputTokens:4000, temperature:0.7}
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response.";
+}
+
+// ─── HELPERS ───────────────────────────────────────────────
+function speak(text) {
+  window.speechSynthesis.cancel();
+  const clean = text.replace(/[#*`]/g,"").replace(/\n+/g," ");
+  const utt = new SpeechSynthesisUtterance(clean.slice(0,3000));
+  utt.rate = 0.92; utt.pitch = 1.05;
+  const voices = window.speechSynthesis.getVoices();
+  const v = voices.find(v=>v.lang.startsWith("en")&&v.name.includes("Google")) || voices.find(v=>v.lang.startsWith("en"));
+  if (v) utt.voice = v;
+  utt.onend = () => { S.speaking = false; render(); };
+  window.speechSynthesis.speak(utt);
+  S.speaking = true;
+}
+
+function addHistory(type, title, content) {
+  S.history = [{id:Date.now(),type,title:title.slice(0,40),content,date:new Date().toLocaleDateString()},...S.history].slice(0,40);
+  localStorage.setItem("sb_history", JSON.stringify(S.history));
+}
+
+function copyText(text) {
+  navigator.clipboard.writeText(text);
+}
+
+function savePlans(){ localStorage.setItem("sb_plans", JSON.stringify(S.plans)); }
+function saveSyll(){ localStorage.setItem("sb_syll", JSON.stringify(S.syllTopics)); }
+function saveExams(){ localStorage.setItem("sb_exams", JSON.stringify(S.exams)); }
+function saveProgress(){ localStorage.setItem("sb_progress", JSON.stringify(S.progress)); }
+
+// ─── RENDER ───────────────────────────────────────────────
+function render() {
+  const app = document.getElementById("app");
+  if (S.page === "login") { app.innerHTML = loginPage(); bindLogin(); return; }
+  if (S.showKeySetup) { app.innerHTML = keySetupPage(); bindKeySetup(); return; }
+  app.innerHTML = mainApp();
+  bindMain();
+}
+
+// ─── LOGIN PAGE ───────────────────────────────────────────
+function loginPage() {
+  return `
+  <div style="min-height:100vh;background:linear-gradient(135deg,#0f0f1a,#1a1a2e);display:flex;align-items:center;justify-content:center;padding:24px">
+    <div style="width:100%;max-width:420px">
+      <div style="text-align:center;margin-bottom:32px">
+        <div style="font-size:56px">📚</div>
+        <h1 style="font-size:34px;font-weight:800;background:linear-gradient(135deg,#7c3aed,#3b82f6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;margin:8px 0 0">StudyBuddy</h1>
+        <p style="color:#94a3b8;margin-top:6px">Your AI-Powered Study Partner</p>
+      </div>
+      <div class="card">
+        <div style="margin-bottom:14px"><input id="ln" placeholder="Full Name" value="${S.loginName}"/></div>
+        <div style="margin-bottom:14px"><input id="le" placeholder="Email Address" value="${S.loginEmail}"/></div>
+        <div style="margin-bottom:20px"><input id="lp" type="password" placeholder="Password" value="${S.loginPass}"/></div>
+        <button class="btn" id="loginBtn" style="width:100%;font-size:16px;padding:13px">🚀 Start Studying</button>
+        <p style="color:#64748b;font-size:12px;text-align:center;margin-top:14px">Enter any email & password to start</p>
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindLogin() {
+  document.getElementById("ln").oninput = e => S.loginName = e.target.value;
+  document.getElementById("le").oninput = e => S.loginEmail = e.target.value;
+  document.getElementById("lp").oninput = e => S.loginPass = e.target.value;
+  document.getElementById("loginBtn").onclick = () => {
+    if (!S.loginEmail) return;
+    S.user = { name: S.loginName || S.loginEmail.split("@")[0], email: S.loginEmail };
+    localStorage.setItem("sb_user", JSON.stringify(S.user));
+    S.page = "app";
+    render();
+  };
+}
+
+// ─── KEY SETUP PAGE ───────────────────────────────────────
+function keySetupPage() {
+  return `
+  <div style="min-height:100vh;background:linear-gradient(135deg,#0f0f1a,#1a1a2e);display:flex;align-items:center;justify-content:center;padding:24px">
+    <div style="width:100%;max-width:480px">
+      <div style="text-align:center;margin-bottom:28px">
+        <div style="font-size:48px">🔑</div>
+        <h2 style="color:#e2e8f0;font-weight:800;margin:10px 0 6px">Add Your Free Gemini API Key</h2>
+        <p style="color:#94a3b8">Completely free — no credit card needed</p>
+      </div>
+      <div class="card">
+        <div style="background:#7c3aed22;border:1px solid #7c3aed44;border-radius:10px;padding:14px;margin-bottom:20px;font-size:13px;line-height:1.8;color:#e2e8f0">
+          <strong>How to get FREE Gemini API key:</strong><br/>
+          1. Go to 👉 <a href="https://aistudio.google.com" target="_blank" style="color:#a78bfa">aistudio.google.com</a><br/>
+          2. Sign in with your Google account<br/>
+          3. Click <strong>"Get API Key"</strong><br/>
+          4. Click <strong>"Create API Key"</strong><br/>
+          5. Copy it and paste below 👇<br/>
+          <span style="color:#10b981">✅ 100% Free — No credit card needed!</span>
+        </div>
+        <input id="apiKeyIn" placeholder="AIzaSy..." value="${S.apiKey}" style="margin-bottom:14px;font-family:monospace"/>
+        <button class="btn" id="saveKey" style="width:100%;font-size:16px;padding:13px">✅ Save Key & Start</button>
+        <button id="skipKey" style="width:100%;background:transparent;color:#94a3b8;border:none;margin-top:10px;cursor:pointer;font-size:13px;padding:8px">Skip (AI won't work)</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function bindKeySetup() {
+  document.getElementById("apiKeyIn").oninput = e => S.apiKey = e.target.value;
+  document.getElementById("saveKey").onclick = () => {
+    if (!S.apiKey.trim()) return;
+    localStorage.setItem("sb_gemini_key", S.apiKey.trim());
+    S.showKeySetup = false;
+    render();
+  };
+  document.getElementById("skipKey").onclick = () => { S.showKeySetup = false; render(); };
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────
+const NAVS = [
+  ["dashboard","🏠","Dashboard"],["notes","📝","AI Notes"],["summary","⚡","Summary"],
+  ["flashcards","🃏","Flashcards"],["exam","📋","Exam Qs"],["pastpaper","📄","Past Paper"],
+  ["quiz","🧠","Quiz"],["pomodoro","⏱️","Pomodoro"],["planner","📅","Planner"],
+  ["syllabus","🎯","Syllabus"],["countdown","⏳","Countdown"],["chat","💬","AI Chat"],
+  ["progress","📊","Progress"],["history","🕐","History"],["profile","👤","Profile"]
+];
+
+function mainApp() {
+  return `
+  <div style="display:flex;min-height:100vh">
+    <!-- SIDEBAR -->
+    <div style="width:210px;min-height:100vh;background:#1a1a2e;border-right:1px solid #2d2d4e;display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto">
+      <div style="padding:16px 12px;border-bottom:1px solid #2d2d4e;display:flex;align-items:center;gap:10px">
+        <span style="font-size:24px">📚</span>
+        <span style="font-weight:800;font-size:16px;background:linear-gradient(135deg,#7c3aed,#3b82f6);-webkit-background-clip:text;-webkit-text-fill-color:transparent">StudyBuddy</span>
+      </div>
+      <div style="flex:1;padding:8px 0">
+        ${NAVS.map(([id,icon,label])=>`
+          <button class="nav-btn ${S.nav===id?'active':''}" data-nav="${id}">
+            <span style="font-size:18px;flex-shrink:0">${icon}</span>${label}
+          </button>`).join("")}
+      </div>
+      <div style="padding:12px;border-top:1px solid #2d2d4e;display:flex;align-items:center;gap:8px">
+        <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:14px;flex-shrink:0">
+          ${(S.user?.name||"SB").slice(0,2).toUpperCase()}
+        </div>
+        <div style="overflow:hidden">
+          <div style="color:#e2e8f0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${S.user?.name}</div>
+          <div style="color:#94a3b8;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${S.user?.email}</div>
+        </div>
+      </div>
+    </div>
+    <!-- CONTENT -->
+    <div style="flex:1;display:flex;flex-direction:column;min-width:0">
+      <div style="padding:12px 24px;border-bottom:1px solid #2d2d4e;background:#1a1a2e;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10">
+        <span style="font-weight:700;font-size:16px;color:#e2e8f0">${NAVS.find(n=>n[0]===S.nav)?.[1]} ${NAVS.find(n=>n[0]===S.nav)?.[2]}</span>
+        <span style="color:#f97316;font-size:13px;font-weight:600">🔥 ${S.streak} day streak</span>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:24px" id="pageContent">
+        ${renderPage()}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderPage() {
+  switch(S.nav) {
+    case "dashboard": return pageDashboard();
+    case "notes": return pageNotes();
+    case "summary": return pageSummary();
+    case "flashcards": return pageFlashcards();
+    case "exam": return pageExam();
+    case "pastpaper": return pagePastPaper();
+    case "quiz": return pageQuiz();
+    case "pomodoro": return pagePomodoro();
+    case "planner": return pagePlanner();
+    case "syllabus": return pageSyllabus();
+    case "countdown": return pageCountdown();
+    case "chat": return pageChat();
+    case "progress": return pageProgress();
+    case "history": return pageHistory();
+    case "profile": return pageProfile();
+    default: return "<p style='color:#94a3b8'>Coming soon!</p>";
+  }
+}
+
+// ─── PAGES ────────────────────────────────────────────────
+function pageDashboard() {
+  const notes = S.history.filter(h=>h.type==="note").length;
+  const flash = S.history.filter(h=>h.type==="flash").length;
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">Welcome back, ${S.user?.name?.split(" ")[0]}! 👋</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;margin-bottom:20px">
+    ${[["🔥",S.streak+" days","Streak","#f97316"],["📝",notes,"Notes Made","#7c3aed"],["🃏",S.flashcards.length,"Flashcards","#3b82f6"],["⏱️",S.pSessions,"Pomodoros","#10b981"]].map(([icon,val,label,color])=>`
+    <div class="card" style="text-align:center;margin-bottom:0">
+      <div style="font-size:28px">${icon}</div>
+      <div style="font-size:24px;font-weight:800;color:${color}">${val}</div>
+      <div style="font-size:12px;color:#94a3b8">${label}</div>
+    </div>`).join("")}
+  </div>
+  <div class="card">
+    <h3 style="color:#e2e8f0;margin-top:0">📊 Subject Progress</h3>
+    ${Object.entries(S.progress).map(([s,p])=>`
+    <div style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+        <span style="color:#e2e8f0;font-size:14px">${s}</span>
+        <span style="color:#94a3b8;font-size:13px">${p}%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" style="width:${p}%"></div></div>
+    </div>`).join("")}
+  </div>
+  <div class="card">
+    <h3 style="color:#e2e8f0;margin-top:0">🕐 Recent Activity</h3>
+    ${S.history.length===0?`<p style="color:#94a3b8">No activity yet. Start studying!</p>`:
+    S.history.slice(0,5).map(h=>`
+    <div style="display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #2d2d4e">
+      <span>${h.type==="note"?"📝":h.type==="summary"?"⚡":h.type==="flash"?"🃏":"📋"}</span>
+      <div>
+        <div style="color:#e2e8f0;font-size:14px;font-weight:600">${h.title}</div>
+        <div style="color:#94a3b8;font-size:12px">${h.date}</div>
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+
+function resultBox(content, id) {
+  return `
+  <div class="result-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+      <span style="color:#10b981;font-size:13px;font-weight:600">✅ Complete Response</span>
+      <div style="display:flex;gap:8px">
+        <button class="copy-btn" onclick="copyText(document.getElementById('res_${id}').innerText)">📋 Copy</button>
+        <button class="copy-btn" onclick="speak(document.getElementById('res_${id}').innerText);render()">🔊 Listen</button>
+        <button class="copy-btn" onclick="window.speechSynthesis.cancel();S.speaking=false;render()">⏹ Stop</button>
+      </div>
+    </div>
+    <pre id="res_${id}" style="color:#e2e8f0;white-space:pre-wrap;font-family:inherit;font-size:14px;line-height:1.8;margin:0">${content}</pre>
+  </div>`;
+}
+
+function loaderHTML() {
+  return `<div style="text-align:center;padding:32px"><div class="spinner"></div><p style="color:#94a3b8;margin-top:12px">AI is generating full response...</p></div>`;
+}
+
+function pageNotes() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">📝 AI Note Maker</h2>
+  <div class="card">
+    <p style="color:#94a3b8;margin-top:0">Enter topic or paste text — AI generates complete structured notes.</p>
+    <textarea id="noteTopic" rows="4" placeholder="Enter topic (e.g. Photosynthesis) or paste text..." style="margin-bottom:12px">${S.noteTopic}</textarea>
+    <button class="btn" id="genNotes">✨ Generate Full Notes</button>
+  </div>
+  ${S.loading?loaderHTML():S.noteResult?resultBox(S.noteResult,"notes"):""}`;
+}
+
+function pageSummary() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">⚡ Quick Summary</h2>
+  <div class="card">
+    <p style="color:#94a3b8;margin-top:0">Just type a topic — AI instantly summarizes it.</p>
+    <div style="display:flex;gap:12px;margin-bottom:12px">
+      <input id="sumTopic" placeholder="Enter topic name (e.g. Gravity, DNA, World War 2)" value="${S.sumTopic}" style="flex:1"/>
+      <button class="btn" id="genSum">⚡ Summarize</button>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${["Photosynthesis","Gravity","DNA","World War 2","Algebra","Climate Change"].map(t=>`<span class="tag" onclick="S.sumTopic='${t}';document.getElementById('sumTopic').value='${t}'">${t}</span>`).join("")}
+    </div>
+  </div>
+  ${S.loading?loaderHTML():S.sumResult?resultBox(S.sumResult,"sum"):""}`;
+}
+
+function pageFlashcards() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">🃏 Flashcards</h2>
+  <div class="card">
+    <div style="display:flex;gap:12px">
+      <input id="flashTopic" placeholder="Topic (e.g. Human Digestive System)" value="${S.flashTopic}" style="flex:1"/>
+      <button class="btn" id="genFlash">✨ Generate</button>
+    </div>
+  </div>
+  ${S.loading?loaderHTML():""}
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+    ${S.flashcards.map((c,i)=>`
+    <div class="flash-card ${S.flipped[i]?'flipped':''}" onclick="S.flipped[${i}]=!S.flipped[${i}];render()">
+      <div>
+        <div style="font-size:11px;color:${S.flipped[i]?"rgba(255,255,255,0.6)":"#94a3b8"};margin-bottom:8px;letter-spacing:1px">${S.flipped[i]?"ANSWER":"QUESTION"} · tap to flip</div>
+        <div style="color:${S.flipped[i]?"#fff":"#e2e8f0"};font-weight:600;font-size:14px;line-height:1.6">${S.flipped[i]?c.a:c.q}</div>
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+
+function pageExam() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">📋 Exam Questions</h2>
+  <div class="card">
+    <div style="display:flex;gap:12px">
+      <input id="examTopic" placeholder="Enter topic or subject" value="${S.examTopic}" style="flex:1"/>
+      <button class="btn" id="genExam">✨ Generate</button>
+    </div>
+  </div>
+  ${S.loading?loaderHTML():S.examResult?resultBox(S.examResult,"exam"):""}`;
+}
+
+function pagePastPaper() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">📄 Past Paper Analyzer</h2>
+  <div class="card">
+    <div style="background:#7c3aed22;border:1px solid #7c3aed44;border-radius:10px;padding:14px;margin-bottom:14px;font-size:13px;color:#e2e8f0">
+      🤖 AI auto-detects past papers, extracts all questions and marks important ones with ⭐
+    </div>
+    <textarea id="paperText" rows="6" placeholder="Paste your exam paper text here...">${S.paperText}</textarea>
+    <button class="btn" id="genPaper" style="margin-top:12px">🔍 Analyze Paper</button>
+  </div>
+  ${S.loading?loaderHTML():S.paperResult?resultBox(S.paperResult,"paper"):""}`;
+}
+
+function pageQuiz() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">🧠 Quiz Mode</h2>
+  <div class="card">
+    <div style="display:flex;gap:12px">
+      <input id="quizTopic" placeholder="Enter quiz topic" value="${S.quizTopic}" style="flex:1"/>
+      <button class="btn" id="genQuiz">✨ Start Quiz</button>
+    </div>
+  </div>
+  ${S.loading?loaderHTML():""}
+  ${S.quizQs.length>0&&!S.quizScore?`
+  ${S.quizQs.map((q,i)=>`
+  <div class="card">
+    <p style="color:#e2e8f0;font-weight:600;margin-top:0">Q${i+1}. ${q.q}</p>
+    <div class="grid2">
+      ${(q.options||[]).map(opt=>`
+      <button onclick="S.quizAns[${i}]='${opt.replace(/'/g,"\\'")}';render()"
+        style="padding:10px;border-radius:10px;border:2px solid ${S.quizAns[i]===opt?"#7c3aed":"#2d2d4e"};background:${S.quizAns[i]===opt?"#7c3aed22":"#0f0f1a"};color:#e2e8f0;cursor:pointer;text-align:left;font-size:13px">
+        ${opt}
+      </button>`).join("")}
+    </div>
+  </div>`).join("")}
+  <button class="btn" id="submitQuiz">📊 Submit Quiz</button>
+  `:""}
+  ${S.quizScore?`
+  <div class="card" style="text-align:center">
+    <div style="font-size:52px">${S.quizScore.s>=S.quizScore.t*0.8?"🎉":S.quizScore.s>=S.quizScore.t*0.5?"👍":"📚"}</div>
+    <h2 style="color:#e2e8f0">${S.quizScore.s}/${S.quizScore.t} Correct</h2>
+    <p style="color:#94a3b8">${S.quizScore.s>=S.quizScore.t*0.8?"Excellent!":"Keep studying!"}</p>
+    <button class="btn" onclick="S.quizQs=[];S.quizScore=null;S.quizAns={};render()">🔄 Try Again</button>
+  </div>`:""}`;
+}
+
+function pagePomodoro() {
+  const m = String(Math.floor(S.pSec/60)).padStart(2,"0");
+  const s = String(S.pSec%60).padStart(2,"0");
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">⏱️ Pomodoro Timer</h2>
+  <div class="card" style="text-align:center">
+    <div style="font-size:12px;color:#7c3aed;letter-spacing:2px;text-transform:uppercase;margin-bottom:16px">Focus Session</div>
+    <div style="font-size:80px;font-weight:800;color:#e2e8f0;letter-spacing:-3px">${m}:${s}</div>
+    <div style="display:flex;gap:12px;justify-content:center;margin-top:24px">
+      <button class="btn" id="pomToggle">${S.pRun?"⏸ Pause":"▶ Start"}</button>
+      <button class="btn" id="pomReset" style="background:transparent;border:1px solid #2d2d4e;color:#e2e8f0">↺ Reset</button>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:center;margin-top:16px">
+      ${[["25m Focus",25],["5m Break",5],["15m Long",15]].map(([l,m])=>`
+      <button onclick="S.pRun=false;clearInterval(S.pInterval);S.pSec=${m}*60;render()"
+        style="background:#0f0f1a;border:1px solid #2d2d4e;color:#e2e8f0;padding:6px 14px;border-radius:8px;cursor:pointer;font-size:13px">${l}</button>`).join("")}
+    </div>
+    <div style="margin-top:24px;color:#e2e8f0;font-weight:600">🔥 ${S.pSessions} sessions today</div>
+  </div>`;
+}
+
+function pagePlanner() {
+  const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+  const SUBJ = ["Mathematics","Physics","Chemistry","Biology","English","History","Computer Science","Economics"];
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">📅 Study Planner</h2>
+  <div class="card">
+    <div class="grid2" style="margin-bottom:12px">
+      <select id="planSubj" style="padding:10px">
+        <option value="">Select Subject</option>
+        ${SUBJ.map(s=>`<option ${S.planSubj===s?"selected":""}>${s}</option>`).join("")}
+      </select>
+      <select id="planDay" style="padding:10px">
+        <option value="">Select Day</option>
+        ${DAYS.map(d=>`<option ${S.planDay===d?"selected":""}>${d}</option>`).join("")}
+      </select>
+    </div>
+    <input id="planGoal" placeholder="Study goal (e.g. Complete Chapter 3)" value="${S.planGoal}" style="margin-bottom:12px"/>
+    <button class="btn" id="addPlan">➕ Add to Planner</button>
+  </div>
+  ${S.plans.map((p,i)=>`
+  <div style="background:#1a1a2e;border:1px solid #2d2d4e;border-radius:12px;padding:12px 16px;margin-bottom:10px;display:flex;align-items:center;gap:12px">
+    <input type="checkbox" ${p.done?"checked":""} onchange="S.plans[${i}].done=!S.plans[${i}].done;savePlans();render()" style="width:18px;height:18px;accent-color:#7c3aed"/>
+    <div style="flex:1">
+      <div style="color:${p.done?"#94a3b8":"#e2e8f0"};font-weight:600;text-decoration:${p.done?"line-through":"none"}">${p.subj} ${p.day?"— "+p.day:""}</div>
+      <div style="color:#94a3b8;font-size:13px">${p.goal}</div>
+    </div>
+    <button onclick="S.plans.splice(${i},1);savePlans();render()" style="background:none;border:none;color:#ef4444;cursor:pointer;font-size:18px">🗑️</button>
+  </div>`).join("")}`;
+}
+
+function pageSyllabus() {
+  const SUBJ = ["Mathematics","Physics","Chemistry","Biology","English","History","Computer Science","Economics"];
+  const subjects = [...new Set(S.syllTopics.map(t=>t.subject))];
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">🎯 Syllabus Tracker</h2>
+  <div class="card">
+    <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap">
+      <select id="syllSubj" style="padding:10px;flex:1;min-width:140px">
+        <option value="">Select Subject</option>
+        ${SUBJ.map(s=>`<option ${S.syllSubj===s?"selected":""}>${s}</option>`).join("")}
+      </select>
+      <input id="syllTopic" placeholder="Add topic (e.g. Chapter 1: Newton's Laws)" value="${S.syllTopic}" style="flex:2;min-width:200px"/>
+      <button class="btn" id="addSyll">➕</button>
+    </div>
+  </div>
+  ${subjects.map(subj=>{
+    const topics = S.syllTopics.filter(t=>t.subject===subj);
+    const done = topics.filter(t=>t.done).length;
+    const pct = Math.round(done/topics.length*100);
+    return `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;margin-bottom:10px">
+        <h3 style="color:#e2e8f0;margin:0">${subj}</h3>
+        <span style="color:#7c3aed;font-weight:700">${pct}%</span>
+      </div>
+      <div class="progress-bar" style="margin-bottom:12px"><div class="progress-fill" style="width:${pct}%"></div></div>
+      ${topics.map((t,i)=>{
+        const idx = S.syllTopics.indexOf(t);
+        return `
+        <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #2d2d4e">
+          <input type="checkbox" ${t.done?"checked":""} onchange="S.syllTopics[${idx}].done=!S.syllTopics[${idx}].done;saveSyll();render()" style="accent-color:#7c3aed"/>
+          <span style="flex:1;color:${t.done?"#94a3b8":"#e2e8f0"};text-decoration:${t.done?"line-through":"none"};font-size:14px">${t.name}</span>
+          <button onclick="S.syllTopics.splice(${idx},1);saveSyll();render()" style="background:none;border:none;color:#ef4444;cursor:pointer">🗑️</button>
+        </div>`;
+      }).join("")}
+    </div>`;
+  }).join("")}`;
+}
+
+function pageCountdown() {
+  const SUBJ = ["Mathematics","Physics","Chemistry","Biology","English","History","Computer Science","Economics"];
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">⏳ Exam Countdown</h2>
+  <div class="card">
+    <div class="grid2" style="margin-bottom:12px">
+      <input id="examName" placeholder="Exam Name" value="${S.examName}"/>
+      <input id="examDate" type="date" value="${S.examDate}" style="padding:10px"/>
+    </div>
+    <select id="examSubj" style="padding:10px;margin-bottom:12px">
+      <option value="">Select Subject</option>
+      ${SUBJ.map(s=>`<option ${S.examSubj===s?"selected":""}>${s}</option>`).join("")}
+    </select>
+    <button class="btn" id="addExam">➕ Add Exam</button>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px">
+    ${S.exams.map((e,i)=>{
+      const days = Math.max(0,Math.ceil((new Date(e.date)-new Date())/86400000));
+      const urgent = days<=7;
+      return `
+      <div class="card" style="text-align:center;background:${urgent?"#ef444411":"#1a1a2e"};border:1px solid ${urgent?"#ef4444":"#2d2d4e"};margin-bottom:0">
+        <div style="font-size:42px;font-weight:800;color:${urgent?"#ef4444":"#7c3aed"}">${days}</div>
+        <div style="color:#94a3b8;font-size:13px">days left</div>
+        <div style="color:#e2e8f0;font-weight:700;margin-top:8px">${e.name}</div>
+        <div style="color:#94a3b8;font-size:13px">${e.subject||""}</div>
+        <button onclick="S.exams.splice(${i},1);saveExams();render()" style="margin-top:10px;background:none;border:none;color:#ef4444;cursor:pointer;font-size:13px">Remove</button>
+      </div>`;
+    }).join("")}
+  </div>`;
+}
+
+function pageChat() {
+  return `
+  <div style="display:flex;flex-direction:column;height:calc(100vh - 140px)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <h2 style="color:#e2e8f0;margin:0">💬 AI Tutor Chat</h2>
+      <div style="display:flex;gap:8px">
+        <button class="copy-btn" onclick="if(S.chat.length){const last=S.chat.filter(m=>m.r==='ai').pop();if(last){speak(last.t);render()}}">🔊 Listen</button>
+        <button class="copy-btn" onclick="window.speechSynthesis.cancel();S.speaking=false;render()">⏹ Stop</button>
+      </div>
+    </div>
+    <div id="chatBox" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:12px;margin-bottom:12px">
+      ${S.chat.length===0?`
+      <div style="text-align:center;padding:40px">
+        <div style="font-size:52px">🤖</div>
+        <h3 style="color:#e2e8f0">Hi! I'm your AI Tutor</h3>
+        <p style="color:#94a3b8">Ask me anything and I'll explain clearly. I'll also speak my answers!</p>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:12px">
+          ${["Explain photosynthesis","Help with algebra","What is Newton's 2nd law?","Explain the water cycle"].map(q=>`
+          <button class="tag" onclick="document.getElementById('chatIn').value='${q}';S.chatIn='${q}'">${q}</button>`).join("")}
+        </div>
+      </div>`:""}
+      ${S.chat.map(m=>`
+      <div style="display:flex;justify-content:${m.r==="user"?"flex-end":"flex-start"};gap:8px;align-items:flex-start">
+        ${m.r==="ai"?`<div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;margin-top:4px">🤖</div>`:""}
+        <div>
+          <div class="${m.r==="user"?"chat-bubble-user":"chat-bubble-ai"}">${m.t}</div>
+          ${m.r==="ai"?`<div style="display:flex;gap:6px;margin-top:6px">
+            <button class="copy-btn" onclick="speak('${m.t.replace(/'/g,"\\'")}');render()">🔊</button>
+            <button class="copy-btn" onclick="copyText('${m.t.replace(/'/g,"\\'")}')">📋</button>
+          </div>`:""}
+        </div>
+      </div>`).join("")}
+      ${S.loading?`
+      <div style="display:flex;gap:10px;align-items:center">
+        <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;font-size:16px">🤖</div>
+        <div class="chat-bubble-ai"><span style="display:inline-flex;gap:4px">${[0,1,2].map(i=>`<span style="width:8px;height:8px;border-radius:50%;background:#7c3aed;display:inline-block;animation:bounce 1s ${i*0.2}s infinite ease-in-out"></span>`).join("")}</span></div>
+      </div>`:""}
+      <div id="chatEnd"></div>
+    </div>
+    <div style="display:flex;gap:12px">
+      <input id="chatIn" placeholder="Ask your AI tutor... (Enter to send)" value="${S.chatIn}"
+        style="flex:1;padding:12px 16px;border-radius:12px;border:1px solid #2d2d4e;background:#0f0f1a;color:#e2e8f0;font-size:14px;outline:none"/>
+      <button class="btn" id="sendChat">Send ➤</button>
+    </div>
+  </div>`;
+}
+
+function pageProgress() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">📊 Progress Tracker</h2>
+  <div class="card">
+    <h3 style="color:#e2e8f0;margin-top:0">Subject Performance</h3>
+    ${Object.entries(S.progress).map(([s,p])=>`
+    <div style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+        <span style="color:#e2e8f0;font-weight:600">${s}</span>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span style="color:#94a3b8;font-size:13px">${p}%</span>
+          <button onclick="S.progress['${s}']=Math.min(100,S.progress['${s}']+5);saveProgress();render()"
+            style="background:#10b981;color:#fff;border:none;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px">+5</button>
+        </div>
+      </div>
+      <div class="progress-bar" style="height:10px">
+        <div class="progress-fill" style="width:${p}%;background:${p>=80?"linear-gradient(90deg,#10b981,#34d399)":p>=60?"linear-gradient(90deg,#7c3aed,#3b82f6)":"linear-gradient(90deg,#f97316,#fbbf24)"}"></div>
+      </div>
+    </div>`).join("")}
+  </div>`;
+}
+
+function pageHistory() {
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">🕐 History</h2>
+  ${S.history.length===0?`<div class="card"><p style="color:#94a3b8;text-align:center">No history yet. Start using StudyBuddy!</p></div>`:`
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button onclick="S.history=[];localStorage.removeItem('sb_history');render()"
+      style="background:transparent;border:1px solid #ef4444;color:#ef4444;border-radius:10px;padding:6px 14px;cursor:pointer;font-size:13px">🗑️ Clear All</button>
+  </div>
+  ${S.history.map((h,i)=>`
+  <div class="card" style="margin-bottom:10px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+      <span style="color:#e2e8f0;font-weight:600">${h.type==="note"?"📝":h.type==="summary"?"⚡":h.type==="flash"?"🃏":"📋"} ${h.title}</span>
+      <span style="color:#94a3b8;font-size:12px">${h.date}</span>
+    </div>
+    <p style="color:#94a3b8;font-size:13px;margin:0 0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${h.content.slice(0,120)}...</p>
+    <button class="copy-btn" onclick="copyText(S.history[${i}].content)">📋 Copy</button>
+  </div>`).join("")}`}`;
+}
+
+function pageProfile() {
+  const LANGS = ["English","Urdu","French","Spanish","Arabic"];
+  return `
+  <h2 style="color:#e2e8f0;margin-top:0">👤 Profile</h2>
+  <div class="card">
+    <div style="display:flex;gap:16px;align-items:center;margin-bottom:20px">
+      <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#3b82f6);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:24px;flex-shrink:0">
+        ${(S.user?.name||"SB").slice(0,2).toUpperCase()}
+      </div>
+      <div>
+        <div style="color:#e2e8f0;font-weight:700;font-size:18px">${S.user?.name}</div>
+        <div style="color:#94a3b8">${S.user?.email}</div>
+        <div style="color:#f97316;font-size:13px;margin-top:4px">🔥 ${S.streak}-day streak</div>
+      </div>
+    </div>
+    <div class="grid2">
+      ${[["Notes",S.history.filter(h=>h.type==="note").length],["Summaries",S.history.filter(h=>h.type==="summary").length],["Pomodoros",S.pSessions],["History Items",S.history.length]].map(([l,v])=>`
+      <div style="background:#0f0f1a;border-radius:10px;padding:14px;text-align:center">
+        <div style="font-size:22px;font-weight:800;color:#7c3aed">${v}</div>
+        <div style="font-size:12px;color:#94a3b8">${l}</div>
+      </div>`).join("")}
+    </div>
+  </div>
+  <div class="card">
+    <h3 style="color:#e2e8f0;margin-top:0">🔑 Gemini API Key</h3>
+    <p style="color:#94a3b8;font-size:13px;margin-top:0">${S.apiKey?"✅ API key active — AI works!":"⚠️ No API key — AI won't work."}</p>
+    <input id="newKey" placeholder="Paste new Gemini API key..." style="margin-bottom:12px" value="${S.apiKey}"/>
+    <button class="btn" onclick="S.apiKey=document.getElementById('newKey').value;localStorage.setItem('sb_gemini_key',S.apiKey);alert('Key saved!')">💾 Save Key</button>
+  </div>
+  <div class="card">
+    <h3 style="color:#e2e8f0;margin-top:0">🌐 Language</h3>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${LANGS.map(l=>`<span class="tag" style="border:2px solid ${S.lang===l?"#7c3aed":"transparent"};color:${S.lang===l?"#a78bfa":"#94a3b8"}" onclick="S.lang='${l}';render()">${l}</span>`).join("")}
+    </div>
+  </div>
+  <button onclick="localStorage.removeItem('sb_user');S.user=null;S.page='login';S.chat=[];render()"
+    style="background:transparent;border:1px solid #ef4444;color:#ef4444;border-radius:10px;padding:10px 20px;cursor:pointer;font-weight:600;font-size:14px;margin-top:8px">🚪 Logout</button>`;
+}
+
+// ─── BIND EVENTS ──────────────────────────────────────────
+function bindMain() {
+  // Nav
+  document.querySelectorAll("[data-nav]").forEach(btn => {
+    btn.onclick = () => { S.nav = btn.dataset.nav; S.loading=false; render(); };
+  });
+
+  // Notes
+  const noteTopic = document.getElementById("noteTopic");
+  if (noteTopic) {
+    noteTopic.oninput = e => S.noteTopic = e.target.value;
+    document.getElementById("genNotes").onclick = async () => {
+      if (!S.noteTopic.trim()) return;
+      S.loading=true; S.noteResult=""; render();
+      try {
+        S.noteResult = await callGemini(`Generate comprehensive, complete, well-structured study notes for: "${S.noteTopic}". Include: introduction, all key concepts, definitions, examples, formulas, summary. Give COMPLETE notes, do not cut off. Language: ${S.lang||"English"}`);
+        addHistory("note", S.noteTopic, S.noteResult);
+      } catch(e){ S.noteResult="Error: "+e.message; }
+      S.loading=false; render();
+    };
+  }
+
+  // Summary
+  const sumTopic = document.getElementById("sumTopic");
+  if (sumTopic) {
+    sumTopic.oninput = e => S.sumTopic = e.target.value;
+    document.getElementById("genSum").onclick = async () => {
+      if (!S.sumTopic.trim()) return;
+      S.loading=true; S.sumResult=""; render();
+      try {
+        S.sumResult = await callGemini(`Give a clear, complete, well-structured summary of: "${S.sumTopic}". Cover: what it is, key points, important facts, why it matters, conclusion. Language: ${S.lang||"English"}`);
+        addHistory("summary", S.sumTopic, S.sumResult);
+      } catch(e){ S.sumResult="Error: "+e.message; }
+      S.loading=false; render();
+    };
+  }
+
+  // Flashcards
+  const flashTopic = document.getElementById("flashTopic");
+  if (flashTopic) {
+    flashTopic.oninput = e => S.flashTopic = e.target.value;
+    document.getElementById("genFlash").onclick = async () => {
+      if (!S.flashTopic.trim()) return;
+      S.loading=true; S.flashcards=[]; S.flipped={}; render();
+      try {
+        const r = await callGemini(`Generate 10 flashcards for "${S.flashTopic}". Return ONLY a valid JSON array, no markdown, no explanation: [{"q":"question","a":"answer"}]. Language: ${S.lang||"English"}`);
+        S.flashcards = JSON.parse(r.replace(/```json|```/g,"").trim());
+        addHistory("flash", S.flashTopic, JSON.stringify(S.flashcards));
+      } catch(e){ S.flashcards=[{q:"Error generating. Try again.",a:"Please retry."}]; }
+      S.loading=false; render();
+    };
+  }
+
+  // Exam Qs
+  const examTopic = document.getElementById("examTopic");
+  if (examTopic) {
+    examTopic.oninput = e => S.examTopic = e.target.value;
+    document.getElementById("genExam").onclick = async () => {
+      if (!S.examTopic.trim()) return;
+      S.loading=true; S.examResult=""; render();
+      try {
+        S.examResult = await callGemini(`Generate 15 complete exam questions with full detailed answers for: "${S.examTopic}". Include 5 short, 5 long/essay, 5 MCQ. Give complete answers. Language: ${S.lang||"English"}`);
+        addHistory("exam", S.examTopic, S.examResult);
+      } catch(e){ S.examResult="Error: "+e.message; }
+      S.loading=false; render();
+    };
+  }
+
+  // Past Paper
+  const paperText = document.getElementById("paperText");
+  if (paperText) {
+    paperText.oninput = e => S.paperText = e.target.value;
+    document.getElementById("genPaper").onclick = async () => {
+      if (!S.paperText.trim()) return;
+      S.loading=true; S.paperResult=""; render();
+      try {
+        S.paperResult = await callGemini(`Analyze this text: "${S.paperText}"\n1. Is this a past exam paper? Check for question numbers, marks, headers.\n2. If YES: extract ALL questions, organize by topic, mark important ones with ⭐, give study tips.\n3. If NO: identify what it is and how to use for studying.\nBe complete. Language: ${S.lang||"English"}`);
+        addHistory("paper", "Past Paper Analysis", S.paperResult);
+      } catch(e){ S.paperResult="Error: "+e.message; }
+      S.loading=false; render();
+    };
+  }
+
+  // Quiz
+  const quizTopic = document.getElementById("quizTopic");
+  if (quizTopic) {
+    quizTopic.oninput = e => S.quizTopic = e.target.value;
+    document.getElementById("genQuiz").onclick = async () => {
+      if (!S.quizTopic.trim()) return;
+      S.loading=true; S.quizQs=[]; S.quizAns={}; S.quizScore=null; render();
+      try {
+        const r = await callGemini(`Generate 6 MCQ questions about "${S.quizTopic}". Return ONLY valid JSON array, no markdown: [{"q":"question","options":["A) opt","B) opt","C) opt","D) opt"],"answer":"A) correct"}]. Language: ${S.lang||"English"}`);
+        S.quizQs = JSON.parse(r.replace(/```json|```/g,"").trim());
+      } catch(e){ S.quizQs=[{q:"Error. Try again.",options:["Retry"],answer:"Retry"}]; }
+      S.loading=false; render();
+    };
+    const submitQuiz = document.getElementById("submitQuiz");
+    if (submitQuiz) {
+      submitQuiz.onclick = () => {
+        let sc=0;
+        S.quizQs.forEach((q,i)=>{ if(S.quizAns[i]===q.answer) sc++; });
+        S.quizScore={s:sc,t:S.quizQs.length}; render();
+      };
+    }
+  }
+
+  // Pomodoro
+  const pomToggle = document.getElementById("pomToggle");
+  if (pomToggle) {
+    pomToggle.onclick = () => {
+      S.pRun = !S.pRun;
+      if (S.pRun) {
+        S.pInterval = setInterval(() => {
+          S.pSec--;
+          if (S.pSec <= 0) { clearInterval(S.pInterval); S.pRun=false; S.pSessions++; S.pSec=25*60; }
+          document.querySelector("#pageContent") && render();
+        }, 1000);
+      } else {
+        clearInterval(S.pInterval);
+      }
+      render();
+    };
+    document.getElementById("pomReset").onclick = () => {
+      clearInterval(S.pInterval); S.pRun=false; S.pSec=25*60; render();
+    };
+  }
+
+  // Planner
+  const planSubj = document.getElementById("planSubj");
+  if (planSubj) {
+    planSubj.onchange = e => S.planSubj = e.target.value;
+    document.getElementById("planDay").onchange = e => S.planDay = e.target.value;
+    document.getElementById("planGoal").oninput = e => S.planGoal = e.target.value;
+    document.getElementById("addPlan").onclick = () => {
+      if (!S.planSubj||!S.planGoal) return;
+      S.plans.push({id:Date.now(),subj:S.planSubj,goal:S.planGoal,day:S.planDay,done:false});
+      savePlans(); S.planGoal=""; render();
+    };
+  }
+
+  // Syllabus
+  const syllSubj = document.getElementById("syllSubj");
+  if (syllSubj) {
+    syllSubj.onchange = e => S.syllSubj = e.target.value;
+    document.getElementById("syllTopic").oninput = e => S.syllTopic = e.target.value;
+    document.getElementById("addSyll").onclick = () => {
+      if (!S.syllSubj||!S.syllTopic.trim()) return;
+      S.syllTopics.push({id:Date.now(),subject:S.syllSubj,name:S.syllTopic,done:false});
+      saveSyll(); S.syllTopic=""; render();
+    };
+  }
+
+  // Countdown
+  const examName = document.getElementById("examName");
+  if (examName) {
+    examName.oninput = e => S.examName = e.target.value;
+    document.getElementById("examDate").oninput = e => S.examDate = e.target.value;
+    document.getElementById("examSubj").onchange = e => S.examSubj = e.target.value;
+    document.getElementById("addExam").onclick = () => {
+      if (!S.examName||!S.examDate) return;
+      S.exams.push({id:Date.now(),name:S.examName,date:S.examDate,subject:S.examSubj});
+      saveExams(); S.examName=""; S.examDate=""; S.examSubj=""; render();
+    };
+  }
+
+  // Chat
+  const chatIn = document.getElementById("chatIn");
+  if (chatIn) {
+    chatIn.oninput = e => S.chatIn = e.target.value;
+    const sendFn = async () => {
+      if (!S.chatIn.trim()||S.loading) return;
+      const msg = S.chatIn.trim(); S.chatIn="";
+      S.chat.push({r:"user",t:msg});
+      S.loading=true; render();
+      document.getElementById("chatEnd")?.scrollIntoView({behavior:"smooth"});
+      try {
+        const history = S.chat.slice(-10).map(m=>`${m.r==="user"?"Student":"Tutor"}: ${m.t}`).join("\n");
+        const r = await callGemini(`You are a friendly expert AI tutor. Answer clearly with examples. Keep conversation context.\n\nConversation:\n${history}\n\nStudent: ${msg}\nTutor:`, "You are an expert friendly AI tutor for students.");
+        S.chat.push({r:"ai",t:r});
+        speak(r);
+      } catch(e){ S.chat.push({r:"ai",t:"Error: "+e.message}); }
+      S.loading=false; render();
+      setTimeout(()=>document.getElementById("chatEnd")?.scrollIntoView({behavior:"smooth"}),100);
+    };
+    chatIn.onkeydown = e => { if(e.key==="Enter"&&!e.shiftKey){ e.preventDefault(); sendFn(); }};
+    document.getElementById("sendChat").onclick = sendFn;
+  }
+}
+
+// ─── INIT ─────────────────────────────────────────────────
+window.speechSynthesis.getVoices();
+render();
+</script>
+</body>
+</html>
